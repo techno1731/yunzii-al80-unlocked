@@ -1,14 +1,7 @@
 /* Copyright 2026 Ennio
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * One keymap for every host. Fn+A selects Mac mode, Fn+S selects Windows/Linux mode,
- * as on the stock firmware; the keyboard restarts to present the matching USB identity.
- *
- *   layer 0  Windows/Linux base        layer 1  its Fn layer (stock assignments)
- *   layer 2  Mac base                  layer 3  its Fn layer
- *
- * In Mac mode the function row sends plain F1-F12: over USB macOS applies its own
- * Magic Keyboard mapping, over radio the firmware does (see al80_apple.c).
+ * One keymap for every host.
  */
 #include QMK_KEYBOARD_H
 
@@ -46,8 +39,7 @@ bool encoder_update_user(uint8_t index, bool clockwise) {
             rgb_matrix_decrease_val();
         }
     } else {
-        /* Over radio a press and release sent back to back are merged by the module and the
-           host sees nothing, so each step is held long enough to cross the link. */
+        /* Over radio a press and release sent back to back are merged by the module and the host sees */
         const uint16_t hold = al80_wireless_mode() == AL80_WL_USB ? TAP_CODE_DELAY : 24;
         tap_code_delay(clockwise ? KC_VOLU : KC_VOLD, hold);
     }
@@ -80,8 +72,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         KC_LSFT, KC_Z,    KC_X,    KC_C,    KC_V,    KC_B,    KC_N,    KC_M,    KC_COMM, KC_DOT,  KC_SLSH,          KC_RSFT, KC_UP,
         KC_LCTL, KC_LALT, KC_LGUI,                   KC_SPC,                   AP_FN,   KC_RGUI, KC_LEFT, KC_DOWN,          KC_RGHT
     ),
-    /* Mac Fn layer: arrows, Backspace and Space stay free for macOS (Home/End, forward delete,
-       input source), so lighting moves to the right-hand cluster and factory reset to Esc. */
+    /* Mac Fn layer */
     [AL80_LAYER_MAC_FN] = LAYOUT(
         FACTORY, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, RM_TOGG, _______,
         _______, BT1,     BT2,     BT3,     RF24,    WIRED,   DARK,    V_ROT,   V_HOME,  V_PIC,   V_GIF,   _______, _______, _______, RM_VALU,

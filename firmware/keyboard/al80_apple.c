@@ -2,17 +2,6 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Apple key behaviour for the AL80.
- *
- * Over USB the board identifies as an Apple keyboard and reports the real Fn/Globe
- * key (AppleVendor Top Case usage 0x03, carried in the reserved byte of the boot
- * keyboard report), which is what Fn+arrows and Globe shortcuts need. The function
- * row is mapped in firmware on every connection.
- *
- * Over Bluetooth or 2.4G the radio module owns the HID descriptor, so there is no
- * Fn usage to send. The firmware substitutes the same behaviour itself.
- *
- * All of this applies in Mac mode only. In Windows/Linux mode the Apple Fn key is
- * never on the active layers and nothing here changes what a key sends.
  */
 #include "quantum.h"
 #include "al80.h"
@@ -123,9 +112,7 @@ bool al80_apple_process(uint16_t keycode, keyrecord_t *record) {
     }
 
     if (al80_os_mode() == AL80_OS_MAC) {
-        /* Function row: media first, Fn gives the F-key. Done here on every connection:
-         * macOS does not apply its own function-row mapping to this keyboard over USB, Apple
-         * identity or not (seen on hardware, 9 Oct 2026). */
+        /* Function row */
         if (keycode >= KC_F1 && keycode <= KC_F12) {
             const uint8_t  i   = (uint8_t)(keycode - KC_F1);
             const uint32_t bit = 1ul << i;
@@ -160,8 +147,7 @@ bool al80_apple_process(uint16_t keycode, keyrecord_t *record) {
     }
 
     if (pressed && fn_held) {
-        /* The host only hears about Fn when a key it can see is pressed with it. Local
-         * keys stay local, so Fn + an LCD or radio key never reads as a Globe tap. */
+        /* The host only hears about Fn when a key it can see is pressed with it */
         if (host_visible(keycode) && host_handles_fn() && !fn_sent) {
             fn_sent = true;
             fn_report(true);

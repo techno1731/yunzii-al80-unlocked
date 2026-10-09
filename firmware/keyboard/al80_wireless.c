@@ -2,32 +2,6 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * BLE / 2.4G support for the AL80's SmartBLE coprocessor.
- *
- * The radio is a separate UART coprocessor (BLE adv name "YUNZII AL80 BT"),
- * NOT part of the STM32. It hangs off USART1 (PA9 TX / PA10 RX, 460800 8N1)
- * and speaks a short `0x55 <len> <payload>` framing. Going wireless means
- * (a) telling the module which mode to enter and (b) swapping QMK's host
- * driver so HID reports are written to the module instead of USB.
- *
- * Written against the protocol as documented in AL80_KNOWLEDGE_BASE.md SD5 and
- * research/al80-wireless-port-SPARC.md, not copied from the b75Pro vendor
- * source -- that source is Apache-2.0 and this tree is GPL-2.0, which are not
- * compatible for redistribution.
- *
- * Deliberate design notes:
- *
- *  - Mode switches block for ~400ms (60 wake bytes + a 350ms settle the module
- *    needs to come out of sleep). That must never happen inside the key path;
- *    it is the same class of stall as the v24 typing regression. A keypress
- *    only sets g_wireless_request, and al80_wireless_task() -- driven from
- *    housekeeping_task_kb -- does the blocking work.
- *
- *  - USART3 (LCD) is interrupt-driven and already sensitive to preemption; that
- *    is what g_screen_busy exists for. USART1 traffic is a second source of the
- *    same pressure, so mode switches defer while the screen is busy.
- *
- *  - In USB mode this file costs nothing at runtime: the host driver is
- *    untouched and the task early-returns.
  */
 
 #include "quantum.h"
@@ -47,9 +21,7 @@
 #    define AL80_BLE_BAUD 460800
 #    define AL80_BLE_SYNC 0x55
 
-/* The module sleeps aggressively. Both the vendor firmware and the sibling
- * b75Pro source push 60 zero bytes and wait 350ms before any real command;
- * shorter sequences are unreliable from cold. */
+/* The module sleeps aggressively */
 #    define AL80_BLE_WAKE_BYTES 60
 #    define AL80_BLE_WAKE_SETTLE_MS 350
 
@@ -59,9 +31,7 @@
 /* START carries a fixed 20-byte payload (name padded with zeroes). */
 #    define AL80_BLE_START_LEN 20
 
-/* Inter-report pacing. The module cannot absorb reports faster than this;
- * ~8ms on BLE (about 125Hz) and ~2ms on the 2.4G dongle. This is the module's
- * limit, not a tunable -- wireless is inherently slower than the wired 1000Hz. */
+/* Inter-report pacing */
 #    define AL80_BLE_REPORT_GAP_MS 8
 #    define AL80_24G_REPORT_GAP_MS 2
 
@@ -78,76 +48,41 @@ static al80_wl_mode_t kb_mode           = AL80_WL_USB;
 static host_driver_t *usb_driver        = NULL;
 static uint32_t       last_report_time  = 0;
 
-/* Set by process_record_kb, consumed by al80_wireless_task. 0 = nothing pending.
- * Encodes mode+1 so that 0 stays "idle"; pair requests set the high bit. */
+/* Set by process_record_kb, consumed by al80_wireless_task */
 static uint8_t g_wireless_request = 0;
 #    define AL80_REQ_PAIR_FLAG 0x80
 #    define AL80_REQ_NOSAVE_FLAG 0x40 /* restore/fallback: don't rewrite the boot mode */
 
-/* Diagnostics. The module is a black box and this is the first firmware that has
- * ever spoken to it, so count both directions and keep the last frame seen --
- * without this there is no way to tell "we never transmitted" from "we
- * transmitted and it ignored us". Readable over raw HID 0x4C. */
+/* Diagnostics */
 static uint16_t dbg_tx_bytes = 0;
 static uint16_t dbg_rx_bytes = 0;
 static uint8_t  dbg_last_rx[4] = {0, 0, 0, 0};
 
-/* Ring of the last 6 COMPLETE frames (cmd, mode, data). The 4-byte peephole
- * above showed the module was alive but not what it was saying. */
+/* Ring of the last 6 COMPLETE frames (cmd, mode, data) */
 #    define AL80_WL_FRAME_LOG 6
 static uint8_t dbg_frames[AL80_WL_FRAME_LOG][3];
 static uint8_t dbg_frame_head  = 0;
 static uint8_t dbg_frame_count = 0;
 
-/* If a mode switch never produces a connection, fall back to USB rather than
- * leaving the keyboard mute. Shipping without this was a mistake: a failed
- * switch silently killed typing with no indication and no way back except a
- * keycode the user had to know about. */
+/* If a mode switch never produces a connection, fall back to USB rather than leaving the keyboard mute */
 #    ifndef AL80_WL_CONNECT_TIMEOUT_MS
 #        define AL80_WL_CONNECT_TIMEOUT_MS 6000
 #    endif
 static uint32_t wl_switch_time = 0;
 
-/* Optimistic mode.
- *
- * Observed 2026-09-29: on stock firmware the module auto-connects to a
- * previously-paired 2.4G dongle the moment it powers up -- no pairing action,
- * no handshake from the MCU. If it does that, it has no reason to send us a
- * connection frame, and gating reports on wireless_connected means we throw
- * away every keystroke while the radio is perfectly healthy. That matches our
- * symptoms exactly: TX fine, RX zero, nothing types, hardware demonstrably OK.
- *
- * Optimistic mode sends reports whenever we're in a wireless mode, whether or
- * not the module ever announced itself. Auto-revert is disabled here because
- * there is no connection signal to wait for -- Fn+T returns to USB, and
- * unplug/replug always boots to USB. */
+/* Optimistic mode */
 #    ifndef AL80_WL_OPTIMISTIC
 #        define AL80_WL_OPTIMISTIC 1
 #    endif
 
 /* ---- boot mode --------------------------------------------------------- */
 
-/* Coming up in USB every time means pressing Fn+Q after every power-on -- and on
- * battery there is no host to press it from, so the keyboard is simply mute
- * until you plug it back in. So remember the last mode you chose and restore it.
- *
- * Stored in byte 1 of the EECONFIG_USER dword, NOT in the KB datablock. Growing
- * EECONFIG_KB_DATA_SIZE shifts EECONFIG_SIZE and with it
- * DYNAMIC_KEYMAP_EEPROM_START, which scrambles the whole stored keymap (see the
- * long note above al80_apply_dynamic_keymap_fixups in al80.c). The user dword is
- * a core eeconfig field at a constant address; al80.c already keeps its fixups
- * version in byte 0 and both sides read-modify-write, so neither disturbs the
- * other. High nibble is a tag, so a fresh board (0x00) reads as "never written"
- * rather than as mode 0.
- *
- * Only ever holds a mode the USER picked. A restore, or a fallback to USB
- * because the cable came back, does not overwrite it. */
+/* Coming up in USB every time means pressing Fn+Q after every power-on -- and on battery there is no */
 #    define AL80_WL_BOOT_SHIFT 8
 #    define AL80_WL_BOOT_MASK 0x0000FF00u
 #    define AL80_WL_BOOT_TAG 0xA0
 
-/* How long USB gets to enumerate before we conclude there is no host and go
- * wireless. A host configures us well inside a second; this is slack for a hub. */
+/* How long USB gets to enumerate before we conclude there is no host and go wireless */
 #    ifndef AL80_WL_BOOT_GRACE_MS
 #        define AL80_WL_BOOT_GRACE_MS 2500
 #    endif
@@ -156,16 +91,12 @@ static bool     wl_boot_done = false; /* boot decision made */
 static uint32_t wl_boot_time = 0;     /* set in init: start of the grace window */
 static bool     wl_auto_mode = false; /* mode came from a restore, not a keypress */
 
-/* Mode field of the last frame the module sent (1..4). The module reports its
- * own state, which on this unit follows the physical BT/wired/dongle switch on
- * the back -- so when it talks to us it is more authoritative about where the
- * radio actually is than anything we have stored. 0 = it has not said. */
+/* Mode field of the last frame the module sent (1..4) */
 static uint8_t module_mode = 0;
 
 /* ---- mode switch ------------------------------------------------------- */
 
-/* The BT / wired / dongle slide switch pulls one of two MCU pins low. The vendor
- * source for this board family names them: BT on C14, 2.4G on C15. */
+/* The BT / wired / dongle slide switch pulls one of two MCU pins low */
 #    define AL80_SW_BT_PIN C14
 #    define AL80_SW_24G_PIN C15
 
@@ -178,10 +109,7 @@ static al80_switch_t sw_read_raw(void) {
 
 /* ---- low level --------------------------------------------------------- */
 
-/* Count what the driver ACCEPTED, not what we asked it to send. sdWrite returns
- * 0 immediately when the driver is not in SD_READY, so incrementing by `len`
- * unconditionally produces a counter that happily reports thousands of bytes
- * while nothing reaches the wire. That mistake cost a whole debugging round. */
+/* Count what the driver ACCEPTED, not what we asked it to send */
 static inline void ble_put(uint8_t b) {
     dbg_tx_bytes += (uint16_t)sdWrite(&SD1, &b, 1);
 }
@@ -190,8 +118,7 @@ static void ble_write(const uint8_t *buf, size_t len) {
     dbg_tx_bytes += (uint16_t)sdWrite(&SD1, buf, len);
 }
 
-/* 60 zero bytes + settle. Every command that can reach a sleeping module needs
- * this first; skipping it is the classic "works warm, fails cold" bug. */
+/* 60 zero bytes + settle */
 static void ble_wake(uint16_t settle_ms) {
     static const uint8_t zeros[AL80_BLE_WAKE_BYTES] = {0};
     ble_write(zeros, sizeof(zeros));
@@ -200,8 +127,7 @@ static void ble_wake(uint16_t settle_ms) {
 
 /* ---- commands ---------------------------------------------------------- */
 
-/* PAIR: enter pairing/discoverable for `mode`. Sent twice -- the module drops
- * the first frame often enough that the vendor firmware always doubles it. */
+/* PAIR: enter pairing/discoverable for `mode`. Sent twice -- the module drops the first frame often */
 static void ble_cmd_pair(uint8_t mode) {
     const uint8_t pkt[5] = {AL80_BLE_SYNC, 0x03, 0x00, mode, 0x01};
     for (uint8_t i = 0; i < 2; i++) {
@@ -210,12 +136,8 @@ static void ble_cmd_pair(uint8_t mode) {
     }
 }
 
-/* START: connect in `mode`, advertising as AL80_BLE_NAME. Payload is fixed
- * length and zero padded; the module reads a fixed window regardless of name. */
-/* 22 bytes total: `55 14` then exactly 20 payload bytes. The length byte counts
- * what follows it, so the buffer is 2 + 20, not 4 + 20. Stock also stamps the
- * mode digit over the string's NUL at [18]. Confirmed byte-for-byte against
- * stock's CONNECT at 0x08006740. */
+/* START: connect in `mode`, advertising as AL80_BLE_NAME. Payload is fixed length and zero padded */
+/* 22 bytes total */
 static void ble_cmd_start(uint8_t mode) {
     uint8_t pkt[2 + AL80_BLE_START_LEN];
     memset(pkt, 0, sizeof(pkt));
@@ -237,8 +159,7 @@ static void ble_cmd_stop(void) {
     ble_write(pkt, sizeof(pkt));
 }
 
-/* Should we hand this report to the module? In optimistic mode, being in a
- * wireless mode is enough. */
+/* Should we hand this report to the module? In optimistic mode, being in a wireless mode is enough */
 static inline bool wl_should_send(void) {
 #    if AL80_WL_OPTIMISTIC
     return kb_mode != AL80_WL_USB;
@@ -247,8 +168,7 @@ static inline bool wl_should_send(void) {
 #    endif
 }
 
-/* Battery percentage for the host's battery service. Only meaningful once a
- * link exists; sending it unconnected is harmless but pointless. */
+/* Battery percentage for the host's battery service */
 void al80_wireless_battery_push(uint8_t pct) {
     if (!wireless_started || kb_mode == AL80_WL_USB || kb_mode == AL80_WL_24G || !wireless_connected) return;
     const uint8_t pkt[4] = {AL80_BLE_SYNC, 0x02, 0x09, pct};
@@ -257,14 +177,12 @@ void al80_wireless_battery_push(uint8_t pct) {
 
 /* ---- host driver ------------------------------------------------------- */
 
-/* The module owns the lock LEDs while wireless; it pushes state back to us via
- * the inbound parser rather than us reading it. Nothing to report upward. */
+/* The module owns the lock LEDs while wireless; it pushes state back to us via the inbound parser */
 static uint8_t wl_keyboard_leds(void) {
     return wl_led_state;
 }
 
-/* Pace reports so we never outrun the module. Blocking here is unavoidable --
- * this IS the send path -- but it only ever runs in wireless mode. */
+/* Pace reports so we never outrun the module */
 static void wl_pace(void) {
     const uint16_t gap     = (kb_mode == AL80_WL_24G) ? AL80_24G_REPORT_GAP_MS : AL80_BLE_REPORT_GAP_MS;
     const uint32_t elapsed = timer_elapsed32(last_report_time);
@@ -321,12 +239,9 @@ static void wl_send_extra(report_extra_t *report) {
 }
 
 #    ifdef RAW_ENABLE
-/* Raw HID is the LCD/control channel and is USB-only by design: the module
- * carries HID reports, not our 0xFF60 vendor traffic. Dropping it while
- * wireless is correct, not a gap. */
+/* Raw HID is the LCD/control channel and is USB-only by design */
 static void wl_send_raw_hid(uint8_t *data, uint8_t length) {
-    /* The module does not carry vendor traffic, but the cable may still be in:
-     * keep the LCD, clock sync and diagnostics alive over USB while typing goes by radio. */
+    /* The module does not carry vendor traffic, but the cable may still be in */
     if (usb_driver && usb_driver->send_raw_hid &&
         usb_device_state_get_configure_state() == USB_DEVICE_STATE_CONFIGURED) {
         usb_driver->send_raw_hid(data, length);
@@ -343,8 +258,7 @@ static host_driver_t wl_driver = {
 
 /* ---- inbound ----------------------------------------------------------- */
 
-/* Module -> STM32 frames are `55 03 <cmd> <mode> <data>`. Only three commands
- * exist (KB SD5): connection status, host lock LEDs, and suspend/resume. */
+/* Module -> STM32 frames are `55 03 <cmd> <mode> <data>`. Only three commands exist (KB SD5) */
 static void ble_handle_frame(uint8_t cmd, uint8_t mode, uint8_t data) {
     dbg_frames[dbg_frame_head][0] = cmd;
     dbg_frames[dbg_frame_head][1] = mode;
@@ -376,8 +290,7 @@ static void ble_handle_frame(uint8_t cmd, uint8_t mode, uint8_t data) {
     }
 }
 
-/* Non-blocking drain of SD1. Runs from housekeeping, so a silent module costs
- * one failed read per scan and nothing else. */
+/* Non-blocking drain of SD1 */
 static void ble_poll_rx(void) {
     static al80_wl_parser_t parser;
     msg_t                   c;
@@ -410,14 +323,12 @@ static void wl_boot_mode_save(al80_wl_mode_t mode) {
     const uint32_t ecu  = eeconfig_read_user();
     const uint32_t want = (ecu & ~AL80_WL_BOOT_MASK) |
                           ((uint32_t)(AL80_WL_BOOT_TAG | (uint8_t)mode) << AL80_WL_BOOT_SHIFT);
-    /* Emulated flash here is wear-levelled but not free, and a mode you are
-     * already booting into is not worth a write. */
+    /* Emulated flash here is wear-levelled but not free, and a mode you are already booting into is not */
     if (want != ecu) eeconfig_update_user(want);
 }
 
 void al80_wireless_init(void) {
-    /* USART1 on its default pins: PA9 TX, PA10 RX. No AFIO remap needed --
-     * unlike USART3, which the LCD drives on the partial remap. */
+    /* USART1 on its default pins */
     setPinInputHigh(AL80_SW_BT_PIN);
     setPinInputHigh(AL80_SW_24G_PIN);
     palSetPadMode(GPIOA, 9, PAL_MODE_STM32_ALTERNATE_PUSHPULL);
@@ -436,11 +347,7 @@ bool al80_wireless_is_connected(void) {
     return wireless_connected;
 }
 
-/* Snapshot for the raw-HID diagnostic (0x4C).
- *
- * Reports the PERIPHERAL's own state, not our beliefs about it. Stock's values
- * (read out of RIPPLE.bin) are BRR=0x004E, CR1=0x212C, CR2=0x0040, CR3=0x0001,
- * and GPIOA->CRH nibble 9 = 0xB (AF push-pull 50MHz). Anything else is the bug. */
+/* Snapshot for the raw-HID diagnostic (0x4C) */
 void al80_wireless_debug(uint8_t *out) {
     out[0] = (uint8_t)kb_mode;
     out[1] = wireless_connected ? 1 : 0;
@@ -478,8 +385,7 @@ void al80_wireless_debug(uint8_t *out) {
         out[27 + i * 3 + 2] = dbg_frames[i][2];
     }
 
-    /* boot-mode state. The raw-HID report is RAW_EPSIZE = 64 bytes, so there is
-     * plenty of room past the frame ring at out[44]. */
+    /* boot-mode state */
     out[45] = (uint8_t)((eeconfig_read_user() & AL80_WL_BOOT_MASK) >> AL80_WL_BOOT_SHIFT);
     out[46] = module_mode;
     out[47] = (uint8_t)((wl_boot_done ? 0x01 : 0) | (wl_auto_mode ? 0x02 : 0));
@@ -498,8 +404,7 @@ uint32_t al80_wireless_last_activity(void) {
     return wl_last_activity;
 }
 
-/* Called from process_record_kb. Records intent only -- the ~400ms of blocking
- * work happens later, off the key path. */
+/* Called from process_record_kb */
 static void wl_request(al80_wl_mode_t mode, bool pair, bool save) {
     g_wireless_request = (uint8_t)(mode + 1) | (pair ? AL80_REQ_PAIR_FLAG : 0) |
                          (save ? 0 : AL80_REQ_NOSAVE_FLAG);
@@ -546,8 +451,7 @@ static void al80_wireless_apply(al80_wl_mode_t mode, bool pair, bool save) {
     host_set_driver(&wl_driver);
 }
 
-/* Driven from housekeeping_task_kb. `screen_busy` mirrors g_screen_busy so a
- * mode switch can never interleave with an LCD image transfer on USART3. */
+/* Driven from housekeeping_task_kb */
 void al80_wireless_task(bool screen_busy) {
     if (!wireless_started) return;
 
@@ -567,8 +471,7 @@ void al80_wireless_task(bool screen_busy) {
         }
     }
 
-    /* Failsafe: a switch that never connects reverts to USB so the keyboard is
-     * never left mute. */
+    /* Failsafe */
 #    if !AL80_WL_OPTIMISTIC
     if (kb_mode != AL80_WL_USB && !wireless_connected && wl_switch_time &&
         timer_elapsed32(wl_switch_time) > AL80_WL_CONNECT_TIMEOUT_MS) {
@@ -579,16 +482,7 @@ void al80_wireless_task(bool screen_busy) {
     }
 #    endif
 
-    /* Boot decision, made once.
-     *
-     * Deliberately not unconditional. Restoring a wireless mode while the cable
-     * is in and the host has enumerated us leaves the keyboard mute for no
-     * visible reason -- the exact failure the auto-revert exists to prevent. So
-     * USB gets first refusal: if it configures inside the grace window we stay
-     * put, and only a host-less power-up (battery, or a charger) goes wireless.
-     *
-     * The module's own reported mode wins over the stored one when we have it,
-     * because on this unit it follows the physical switch on the back. */
+    /* Boot decision, made once */
     if (!wl_boot_done) {
         if (usb_device_state_get_configure_state() == USB_DEVICE_STATE_CONFIGURED) {
             wl_boot_done = true; /* a host owns us; USB stays */
@@ -605,9 +499,7 @@ void al80_wireless_task(bool screen_busy) {
         }
     }
 
-    /* Cable came back while we were on a mode nobody asked for. Hand the host
-     * its keyboard back; the stored choice is untouched, so the next host-less
-     * boot still comes up wireless. */
+    /* Cable came back while we were on a mode nobody asked for */
     if (wl_auto_mode && kb_mode != AL80_WL_USB &&
         usb_device_state_get_configure_state() == USB_DEVICE_STATE_CONFIGURED) {
         wl_auto_mode = false;

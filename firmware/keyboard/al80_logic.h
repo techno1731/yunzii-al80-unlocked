@@ -1,9 +1,7 @@
 /* Copyright 2026 Ennio
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Hardware-free logic of the AL80 firmware: battery maths, the radio module's
- * status-frame parser and the mode-switch decode. Kept free of QMK and ChibiOS
- * so firmware/test/test_logic.c can run it on the build machine.
+ * Hardware-free logic of the AL80 firmware.
  */
 #pragma once
 
@@ -49,8 +47,7 @@ static inline uint8_t al80_batt_pct(uint16_t mv) {
     return 100;
 }
 
-/* Cell voltage is ratiometric: mv = raw * 1764 / vref (the vendor's divider constant).
- * With the cable in, a full cell reads near zero because the charger has let go of it. */
+/* Cell voltage is ratiometric */
 static inline al80_batt_t al80_batt_eval(uint16_t raw, uint16_t vref, bool plugged) {
     al80_batt_t b = {raw, vref, 0, 100, plugged ? AL80_BATT_CHARGING : AL80_BATT_DISCHARGING, vref != 0};
     if (!b.valid) return b;
@@ -63,10 +60,7 @@ static inline al80_batt_t al80_batt_eval(uint16_t raw, uint16_t vref, bool plugg
     return b;
 }
 
-/* The level shown to the user. A cell under charge reads high and a cell under load reads
- * low, so the raw percentage jumps when the cable goes in or out. The shown level follows
- * the measurement one point at a time and only in the direction the cell can really move:
- * up while charging, down while discharging. Call once per sample. */
+/* The level shown to the user */
 static inline uint8_t al80_batt_follow(uint8_t shown, uint8_t measured, uint8_t status) {
     if (status == AL80_BATT_FULL) return 100;
     if (status == AL80_BATT_CHARGING) return (measured > shown && shown < 100) ? (uint8_t)(shown + 1) : shown;

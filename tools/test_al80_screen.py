@@ -63,8 +63,7 @@ class Packets(unittest.TestCase):
         self.assertEqual([h for h in headers if h == 3.0], [3.0, 3.0])  # frames 0 and 16
 
     def test_gif_control_packets_match_vendor_bytes(self):
-        """The first bytes of each control packet, as the vendor's own app sends them for a
-        three-frame GIF on the GIF page."""
+        """The first bytes of each control packet, as the vendor's own app sends them for a three-frame."""
         vendor = [
             "40 00 00 09 b1 01 00 a5 5a 12 00 02 04 50 01 00",   # start
             "41 00 00 09 24 02 00 a5 5a 13 00 02 c4 01 01 00",   # start, second half

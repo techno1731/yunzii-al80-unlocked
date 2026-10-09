@@ -1,18 +1,13 @@
 /* Copyright 2026 snackdriven
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Shared AL80 declarations. Lives here so both al80.c (raw-HID handler,
- * EEPROM load/save) and rgb_matrix_kb.inc (the PALETTE_CYCLE effect, compiled
- * into rgb_matrix.c) see the same runtime palette mirror.
+ * Shared AL80 declarations.
  */
 #pragma once
 
 #include <stdint.h>
 #include <stdbool.h>
-/* For QK_KB_0 (== 0x7E00, the VIA CUSTOM(0) base) used by the keycode enum below.
- * Safe to include here: it is include-guarded and pulls only enum/macro definitions,
- * so al80.h stays self-sufficient no matter which TU includes it (al80.c after
- * quantum.h, or rgb_matrix_kb.inc from inside rgb_matrix.c). */
+/* For QK_KB_0 (== 0x7E00, the VIA CUSTOM(0) base) used by the keycode enum below */
 #include "quantum_keycodes.h"
 #include "action.h"
 
@@ -20,13 +15,7 @@
 #    define AL80_PALETTE_LEN 3
 #endif
 
-/* ---- custom keycodes (VIA CUSTOM(n) == QK_KB_0 + n) ----
- * This build shipped NO process_record of any kind, so the stock vendor's view-switch
- * customs did nothing. process_record_kb (al80.c) now consumes these:
- *   VIEW_*   (22-24) — host-free LCD view switch over USART3 (home/picture/gif).
- *   PANEL_*  (25-29) — fire the local view switch AND signal the host cycler (raw-HID 0x4B).
- * Values are pinned to the Studio/VIA numbering so the existing Studio presets bind them
- * with zero code change; the 0-21 gap preserves alignment with the factory customs. */
+/* custom keycodes (VIA CUSTOM(n) == QK_KB_0 + n) ---- This build shipped NO process_record of any */
 enum al80_keycodes {
     AL80_KC_VIEW_HOME = QK_KB_0 + 22,          /* 0x7E16 CUSTOM(22) -> PK_GO home     0x0B */
     AL80_KC_VIEW_PICTURE,                       /* 0x7E17 CUSTOM(23) -> PK_TOGGLE_PIC  0x0D */
@@ -37,13 +26,7 @@ enum al80_keycodes {
     AL80_KC_CYCLE_TOGGLE,                        /* 0x7E1C CUSTOM(28) -> panel 0xF0 (toggle)    */
     AL80_KC_PANEL_NEXT,                          /* 0x7E1D CUSTOM(29) -> panel 0xF1 (next)      */
 
-    /* ---- wireless ----
-     * Pinned to the FACTORY numbering (KB SD5 / research/al80-feature-map.md SD7)
-     * so the stock muscle memory and any existing VIA/Studio presets keep working:
-     * CUSTOM(1..3) are BT slots 1-3 and CUSTOM(4) is the 2.4G dongle. Stock uses a
-     * dedicated KC_USB for wired; we have no such keycode here, so USB lands after
-     * the panel block rather than colliding with an unrelated factory custom.
-     * Hold-to-pair is handled in process_record_kb, not by separate keycodes. */
+    /* wireless ---- Pinned to the FACTORY numbering (KB SD5 / research/al80-feature-map.md SD7) so the */
     AL80_KC_BT1 = QK_KB_0 + 1,                   /* 0x7E01 CUSTOM(1)  -> BLE slot 1 */
     AL80_KC_BT2 = QK_KB_0 + 2,                   /* 0x7E02 CUSTOM(2)  -> BLE slot 2 */
     AL80_KC_BT3 = QK_KB_0 + 3,                   /* 0x7E03 CUSTOM(3)  -> BLE slot 3 */
@@ -68,8 +51,7 @@ enum al80_keycodes {
     AL80_KC_DARK,                                /* 0x7E25 CUSTOM(37) -> LCD and all lights off, or back on */
 };
 
-/* ---- OS mode (al80_os.c) ----
- * Values are the display module's PK_OS_TYPE. Windows mode also serves Linux. */
+/* OS mode (al80_os.c) ---- Values are the display module's PK_OS_TYPE. Windows mode also serves Linux */
 typedef enum { AL80_OS_WIN = 0, AL80_OS_MAC = 1 } al80_os_t;
 
 al80_os_t al80_os_mode(void);
@@ -92,9 +74,7 @@ void al80_apple_fn_used(void);
 #define AL80_LAYER_MAC 2
 #define AL80_LAYER_MAC_FN 3
 
-/* ---- wireless (al80_wireless.c) ----
- * Mode values are the module's own 1-based numbering: 1-3 are BLE slots, 4 is
- * the 2.4G dongle. USB is 0 and means "radio stopped, USB host driver". */
+/* wireless (al80_wireless.c) ---- Mode values are the module's own 1-based numbering */
 typedef enum {
     AL80_WL_USB = 0,
     AL80_WL_BT1 = 1,
@@ -126,6 +106,5 @@ typedef struct {
     uint8_t s;
 } al80_palette_color_t;
 
-/* RAM mirror of the palette. Defined in al80.c, read live by PALETTE_CYCLE.
- * raw-HID 0x44 edits it in place; 0x45 flushes it to EEPROM. */
+/* RAM mirror of the palette */
 extern al80_palette_color_t al80_palette[AL80_PALETTE_LEN];

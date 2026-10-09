@@ -1,10 +1,7 @@
 /* Copyright 2026 snackdriven
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * YUNZII AL80 board support:
- *   - SWJ disable (matrix uses PA13/14/15, PB3/4)
- *   - aw20216s LED position map (recovered from RIPPLE.bin @ flash 0x080116A0)
- *   - LCD pass-through: forward raw-HID 0x40/0x41/0x42 payloads over USART3
+ * YUNZII AL80 board support.
  */
 #include "quantum.h"
 #include "raw_hid.h"
@@ -16,27 +13,18 @@
 #include <string.h>
 #include "usb_device_state.h"
 
-/* Set while an LCD transfer (0x40..0x42) is in flight. aw20216s_flush() checks this and
- * skips its SPI writes so they can't preempt the interrupt-driven USART3 TX and put gaps in
- * the byte stream (which shears the image). Watchdog clears it if a transfer stalls. */
+/* Set while an LCD transfer (0x40..0x42) is in flight */
 volatile bool g_screen_busy = false;
 static uint16_t screen_busy_wd = 0;
 
-/* ---- battery telemetry (ported from b75Pro smart_kb16: battery.c / adc.c / keyboard_screen.c) ----
- * The homepage battery gauge is drawn by the display module but FED by the keyboard: stock sends
- * PK_BATT_QUANTITY (announce type 0x06, one % byte) + PK_BATT_STATUS (0x07, charge state) over
- * USART3. A pure passthrough never sends these, so the gauge reads empty. We read ADC1 ch9 (B1),
- * convert (mv = adc*1764/vref), map to % with b75Pro's piecewise thresholds (al80_logic.h), and emit
- * the same A5 5A packets the module expects (CRC16-MODBUS over [type,flag,len], as al80-studio). */
+/* Battery telemetry, after the vendor's B75 Pro source. */
 /* USB plug detect (high = cable in). Same pin as the vendor firmware. */
 #define AL80_PLUG_PIN B9
 
 /* Last battery sample. raw/vref are kept for the 0x4C diagnostic. */
 static al80_batt_t al80_batt = {0, 0, 0, 100, AL80_BATT_CHARGING, false};
 
-/* ADC1 is driven directly: the cell (ch9 = B1) is measured against the internal
- * reference (ch17), which needs TSVREFE, and QMK's analog driver clears that bit
- * on every conversion. */
+/* ADC1 is driven directly */
 static void al80_adc_init(void) {
     RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
     (void)RCC->APB2ENR;
@@ -73,9 +61,7 @@ static uint16_t al80_adc_read(uint8_t channel) {
 /* Level shown on the LCD and reported to the host: the measurement, rate-limited. */
 static uint8_t al80_batt_shown = 100;
 
-/* History for the 0x4F diagnostic: one sample every five minutes, eight hours deep. It is
- * how a discharge curve gets read back after a stretch on battery, when no cable was there
- * to ask. RAM only. */
+/* History for the 0x4F diagnostic */
 #define AL80_BATT_LOG_LEN 96
 #define AL80_BATT_LOG_EVERY 30 /* samples: 30 x 10 s */
 typedef struct {
@@ -119,10 +105,7 @@ static void al80_screen_send_u8(uint8_t type, uint8_t val) {
     sdWrite(&SD3, pkt, sizeof(pkt));
 }
 
-/* One PK_GO view announce (home 0x0B / picture 0x0D / gif 0x0F) to the module. Unlike a status
- * packet, a view announce carries ZERO data: len byte 0x00, so the packet is 7 bytes (no trailing
- * value), not 8. These bytes are identical to protocol.js buildView(type) -- the same wire the host
- * relays via raw_hid_receive_kb (which sdWrites only data[7..]). CRC16-MODBUS over [type,0,0]. */
+/* One PK_GO view announce (home 0x0B / picture 0x0D / gif 0x0F) to the module */
 static void al80_screen_send_view(uint8_t type) {
     uint8_t  hdr[3] = { type, 0x00, 0x00 };
     uint16_t crc    = al80_crc16(hdr, 3);
@@ -130,9 +113,7 @@ static void al80_screen_send_view(uint8_t type) {
     sdWrite(&SD3, pkt, sizeof(pkt));
 }
 
-/* Switch the on-device LCD view over USART3, host-free. Wrapped in the same g_screen_busy
- * discipline as al80_battery_push so the announce can't interleave with the RGB SPI stream.
- * Called only from housekeeping_task_kb (deferred via view_request) when !g_screen_busy. */
+/* Switch the on-device LCD view over USART3, host-free */
 static void al80_screen_view(uint8_t type) {
     g_screen_busy = true;
     al80_screen_send_view(type);
@@ -141,11 +122,7 @@ static void al80_screen_view(uint8_t type) {
     screen_busy_wd = 0;
 }
 
-/* Keyboard -> host panel-switch signal: an UNSOLICITED raw-HID report [0x4B, panelId, 0...] on the
- * interface the host already reads (device.js _onData). A 0x4B first byte routes to cycler.jumpTo.
- * Mirrors al80_screen_send_u8's shape but on the USB raw-HID path, not USART3. Fired directly from
- * the key handler (raw_hid_send is not the USART3 subsystem, so it has no byte-shear concern; if it
- * ever collides with an in-flight image ACK stream on-device, gate it on !g_screen_busy). */
+/* Keyboard -> host panel-switch signal */
 static void al80_panel_req(uint8_t id) {
     uint8_t buf[RAW_EPSIZE] = {0};
     buf[0] = AP_PANEL_REQ;
@@ -153,8 +130,7 @@ static void al80_panel_req(uint8_t id) {
     raw_hid_send(buf, RAW_EPSIZE);
 }
 
-/* Read the battery and push PK_BATT_QUANTITY (%) + PK_BATT_STATUS to the module. Caller must
- * ensure no image transfer is in flight (checks g_screen_busy) so the bytes don't interleave. */
+/* Read the battery and push PK_BATT_QUANTITY (%) + PK_BATT_STATUS to the module */
 static void al80_battery_push(void) {
     g_screen_busy = true;                             /* pause RGB SPI so the tiny packets don't jitter */
     al80_screen_send_u8(0x07, al80_batt.status);      /* PK_BATT_STATUS */
@@ -165,10 +141,7 @@ static void al80_battery_push(void) {
     screen_busy_wd = 0;
 }
 
-/* Push the full homepage widget set the display module expects at boot (ported from b75Pro
- * keyboard_screen.c screen_boot_step: conn type, OS type, lock states, battery). The module
- * initializes its homepage gauges from this batch; a lone battery packet may have no widget to
- * fill. Re-sent periodically so it self-heals after a main-page image push clears the homepage. */
+/* Push every home page value the display module expects. */
 static void al80_homepage_init(void) {
     uint8_t  leds = host_keyboard_leds();
 #if defined(AL80_WIRELESS_ENABLE)
@@ -188,34 +161,14 @@ static void al80_homepage_init(void) {
     screen_busy_wd = 0;
 }
 
-/* ---- homepage caps/num-lock icons ----
- * The display module draws the caps/num lock icons from PK_CAPS_STATUS (0x03) / PK_NUMLOCK_STATUS
- * (0x04) status packets. Stock and the b75Pro sibling push these on every real LED change
- * (b75Pro keyboard_screen.c reads host_keyboard_leds() and sets PK_CAPS/PK_NUMLOCK flags). The
- * passthrough here only sent them in the boot batch + the 30s self-heal, so a Caps/Num toggle
- * lagged up to 30s and looked dead.
- *
- * The blocking USART3 send below runs in the single-threaded main loop (~1ms: 2 packets + two
- * 500us settles), so it MUST only run on an actual caps/num transition. QMK's led_task() is
- * change-gated, but led_set() (-> led_update_kb) is ALSO called unconditionally on every layer
- * action (quantum/action.c) and in command mode, passing an UNCHANGED host_keyboard_leds(). v24
- * sent on every such call, so every layer key / layer-tap did a blocking send and stalled typing +
- * the encoder. We track last_locks and early-return when caps/num are unchanged, so the wire only
- * moves on a genuine toggle (a handful of bytes, once). If a transfer is mid-flight we defer via
- * locks_dirty. */
+/* Caps and Num lock icons on the home page. */
 static volatile bool locks_dirty = false;
 static uint8_t       last_locks  = 0xFF;   /* caps<<1|num; 0xFF = unknown -> first report syncs */
 
-/* Deferred host-free view-switch request. process_record_kb sets this to a PK_GO view type
- * (0x0B home / 0x0D picture / 0x0F gif) on a view-key press; housekeeping_task_kb flushes it via
- * al80_screen_view when !g_screen_busy, so the 7-byte announce never interleaves with an in-flight
- * image passthrough or the RGB SPI stream (same deferral discipline as locks_dirty). Multiple
- * presses coalesce to the last. 0 = nothing pending. */
+/* Deferred host-free view-switch request */
 static volatile uint8_t view_request = 0;
 
-/* LCD rotation: the keyboard alternates the home page and the GIF page by itself, no host
- * needed. Stored in byte 3 of the EECONFIG_USER dword (tag in the high nibble). Choosing a
- * view by hand stops it. */
+/* LCD rotation */
 #define AL80_ROTATE_SHIFT 24
 #define AL80_ROTATE_MASK 0xFF000000u
 #define AL80_ROTATE_TAG 0xD0
@@ -237,13 +190,7 @@ static void al80_rotate_load(void) {
     rotate_time     = timer_read32();
 }
 
-/* ---- custom keycode handler (NEW: this build shipped no process_record of any kind) ----
- * View keys switch the LCD on-device via the deferred view_request; PANEL_* keys additionally
- * signal the host cycler over raw-HID 0x4B. Press-edge only -- QMK does not re-invoke held custom
- * keycodes, so a held key fires exactly once (no repeat storm). Every case returns false to consume
- * the keycode: no HID keystroke reaches the OS/focused app. The handler sets one byte (view_request)
- * and/or fires raw_hid_send; it never does a blocking USART3 sdWrite/wait_us in the key path (that
- * was the v24 typing-stall regression -- USART3 work is deferred to housekeeping_task_kb). */
+/* custom keycode handler (NEW: this build shipped no process_record of any kind) ---- View keys */
 static void al80_bar_step(bool up);
 static void al80_dark_set(bool dark);
 static bool lights_dark;
@@ -316,12 +263,7 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
                 view_request = rotate_on ? 0x0F : 0x0B;
             }
             return false;
-        /* Host-only, NO local view (was view_request=0x0D). 0x0D is PK_TOGGLE_PIC — it ADVANCES the
-         * picture ring (KB R3), not "show picture page". The host's PK_ADD_PIC already commits AND
-         * displays the panel card and brings the LCD to the picture view on its own, so a local
-         * advance only (a) desyncs the host's delete-before-add ring hygiene and (b) flashes an old
-         * slot before the card lands. Trade-off (per hotkey-SPARC FR2/§77): we lose the instant-view
-         * gap-filler + no-host fallback; the card now appears when the host repaints (~1-1.5s). */
+        /* Host-only, NO local view (was view_request=0x0D) */
         case AL80_KC_PANEL_NOWPLAYING:
             if (record->event.pressed) al80_panel_req(0x00);
             return false;
@@ -339,13 +281,7 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
             return false;
 
 #if defined(AL80_WIRELESS_ENABLE)
-        /* Tap = connect to that slot, hold = re-pair it. Matching stock's feel:
-         * you only want pairing mode deliberately, not every time you switch back
-         * to a device you already own.
-         *
-         * These only set a flag. The switch itself blocks ~400ms (wake bytes plus
-         * the module's settle) and runs from housekeeping -- doing it here would
-         * stall typing exactly the way v24 did. */
+        /* Tap = connect to that slot, hold = re-pair it */
         case AL80_KC_BT1:
         case AL80_KC_BT2:
         case AL80_KC_BT3:
@@ -369,8 +305,7 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
     }
 }
 
-/* Push caps + num lock to the module. Main-loop context (like al80_battery_push), so the two 500us
- * settles are fine. Bit map matches al80_homepage_init: caps = leds bit1, num = leds bit0. */
+/* Push caps + num lock to the module */
 static void al80_locks_push(void) {
     uint8_t leds = host_keyboard_leds();
     g_screen_busy = true;                          /* pause RGB SPI so the tiny packets don't jitter */
@@ -382,9 +317,7 @@ static void al80_locks_push(void) {
     screen_busy_wd = 0;
 }
 
-/* Called by QMK whenever it (re)binds host LED state - on a real change AND on every layer action.
- * Only touch the wire when caps/num actually transitioned; otherwise return immediately so plain
- * typing / layer keys / the encoder never eat a blocking USART3 send. */
+/* Called by QMK whenever it (re)binds host LED state - on a real change AND on every layer action */
 bool led_update_kb(led_t led_state) {
     bool res = led_update_user(led_state);
     if (res) {
@@ -401,25 +334,17 @@ bool led_update_kb(led_t led_state) {
     return res;
 }
 
-/* ---- user-editable RGB palette store ----
- * al80_palette is the live RAM mirror the PALETTE_CYCLE effect reads. It is
- * seeded at keyboard_post_init_kb: from EEPROM if a valid magic byte is
- * present, otherwise from the compiled default (and NOT written back, so a
- * fresh board leaves flash untouched). raw-HID 0x44 edits it live; 0x45
- * commits it to a dedicated wear-leveling KB datablock in one flash write. */
+/* user-editable RGB palette store ---- al80_palette is the live RAM mirror the PALETTE_CYCLE effect */
 al80_palette_color_t al80_palette[AL80_PALETTE_LEN];
 
-/* Compiled default palette: teal -> magenta -> amber. Keep AL80_PALETTE_LEN
- * (config.h) and this initializer in sync when growing the palette. */
+/* Compiled default palette */
 static const al80_palette_color_t AL80_PALETTE_DEFAULT[AL80_PALETTE_LEN] = {
     {128, 255},  // teal
     {213, 255},  // magenta
     { 28, 255},  // amber
 };
 
-/* EEPROM layout of the KB datablock: a magic byte (VIA-style validity marker)
- * followed by the palette. If magic != AL80_PALETTE_MAGIC we treat the block
- * as unset and fall back to the compiled default. */
+/* EEPROM layout of the KB datablock */
 #define AL80_PALETTE_MAGIC 0x5A
 typedef struct {
     uint8_t              magic;
@@ -429,8 +354,7 @@ typedef struct {
 static void al80_palette_load(void) {
 #if (EECONFIG_KB_DATA_SIZE) > 0
     al80_palette_store_t store;
-    /* read_kb_datablock zero-fills when the block has never been written, so a
-       fresh board reads magic == 0 and falls through to the default below. */
+    /* read_kb_datablock zero-fills when the block has never been written, so a fresh board reads magic == */
     eeconfig_read_kb_datablock(&store, 0, sizeof(store));
     if (store.magic == AL80_PALETTE_MAGIC) {
         memcpy(al80_palette, store.colors, sizeof(al80_palette));
@@ -450,22 +374,14 @@ static void al80_palette_save(void) {
 #endif
 }
 
-/* ---- independent side-LED-bar color ----
- * The side bar is RGB-matrix indices 76..78 (aw20216s driver 1). By default it
- * follows the keys (keylight flag). When bar_independent is true, the RGB-matrix
- * indicators hook overrides those three LEDs with bar_hsv every frame. The state
- * is statically initialized (valid before the first render — no boot garbage),
- * seeded from a SEPARATE EEPROM sub-block at post_init, edited live over raw-HID
- * (0x47) and persisted (0x48). It lives at its own offset so it never disturbs
- * the palette block (which keeps its own magic and layout). */
+/* independent side-LED-bar color ---- The side bar is RGB-matrix indices 76..78 (aw20216s driver 1) */
 static uint8_t bar_h           = 128;   /* cyan/teal on the 0..255 wheel */
 static uint8_t bar_s           = 255;
 static uint8_t bar_v           = 255;
 static bool    bar_independent = true;   /* default: bar shows its own color */
 
 #define AL80_BAR_MAGIC 0x5B              /* distinct from AL80_PALETTE_MAGIC 0x5A */
-/* Offset of the bar sub-block: right after the palette store (config.h reserves
- * AL80_PALETTE_STORE_SIZE + AL80_BAR_STORE_SIZE bytes total). */
+/* Offset of the bar sub-block */
 #define AL80_BAR_STORE_OFFSET (sizeof(al80_palette_store_t))
 
 typedef struct {
@@ -497,12 +413,7 @@ static void al80_bar_save(void) {
 #endif
 }
 
-/* ---- GIF page backlight theme ----
- * The GIF on the LCD can be a medley of scenes. The host tool that uploads it also stores, per
- * scene, how long it lasts and its dominant colour. While the GIF page is showing, the key
- * backlight takes each scene's colour in step with the animation; when the LCD leaves the GIF
- * page the backlight returns to what the user had. The module restarts the GIF when its page is
- * selected, so timing is counted from that moment. */
+/* GIF page backlight theme ---- The GIF on the LCD can be a medley of scenes */
 #define AL80_THEME_MAGIC 0x5C
 #define AL80_THEME_STORE_OFFSET (AL80_BAR_STORE_OFFSET + sizeof(al80_bar_store_t))
 
@@ -522,8 +433,7 @@ static al80_theme_store_t theme       = {0, 0, {{0, 0, 0}}};
 static bool               gif_showing = false; /* the LCD is on its GIF page */
 static uint32_t           gif_since   = 0;     /* when it got there */
 
-/* Lighting is managed: one solid colour across keys and side bar. White on the home page, the
- * scene's colour on the GIF page, and everything off, LCD included, in dark mode. */
+/* Lighting is managed */
 static bool    lights_dark    = false;
 static int16_t light_hue      = -1; /* colour currently applied, -1 before the first apply */
 static uint8_t light_sat      = 0;
@@ -606,21 +516,12 @@ static void al80_bar_step(bool up) {
     al80_bar_save();
 }
 
-/* ---- per-key live LED stream (host audio-reactive) ----
- * The host streams the whole 82-LED field save-less over raw-HID 0x49 in <=20-LED chunks. Each
- * chunk memcpys into g_live_rgb; the indicators hook below repaints the buffer every render. No
- * double-buffer -- a torn frame (chunks from frame N and N-1) lasts <=1 render (~16 ms), invisible
- * for VU motion. Zero EEPROM writes. When frames stop, matrix_scan_kb clears g_live_active after
- * AL80_LIVE_IDLE_MS and the user's prior effect resumes untouched (we only override in the hook;
- * rgb_matrix_config is never modified). Buffer is .bss (zero-init), ~246 B of the 20 KB RAM. */
+/* per-key live LED stream (host audio-reactive) ---- The host streams the whole 82-LED field */
 static uint8_t           g_live_rgb[RGB_MATRIX_LED_COUNT * 3];
 static volatile bool     g_live_active = false;
 static volatile uint32_t g_live_last   = 0;
 
-/* Per-render override. When a live audio field is streaming, paint g_live_rgb across the whole
- * slice (live owns the board, side bar included). Otherwise fall back to the independent side-bar
- * override (76..78). The RGB-matrix core calls this once per render with [led_min, led_max), so
- * bounds-check against the slice AND RGB_MATRIX_LED_COUNT. */
+/* Per-render override */
 bool rgb_matrix_indicators_advanced_kb(uint8_t led_min, uint8_t led_max) {
     if (g_live_active) {
         for (uint8_t i = led_min; i < led_max && i < RGB_MATRIX_LED_COUNT; i++) {
@@ -644,11 +545,7 @@ bool rgb_matrix_indicators_advanced_kb(uint8_t led_min, uint8_t led_max) {
     return rgb_matrix_indicators_advanced_user(led_min, led_max);
 }
 
-/* ---- aw20216s LED map ----
- * {driver, R, G, B}. Macro naming reconciled with drivers/led/aw20216s.h,
- * which spells positions SW<row>_CS<col> (the params file used CS<col>_SW<row>;
- * converted 1:1 by swapping the pair). idx 82/83 = {0,0,0,0} unused.
- */
+/* aw20216s LED map ---- {driver, R, G, B}. Macro naming reconciled with drivers/led/aw20216s.h, which */
 const aw20216s_led_t PROGMEM g_aw20216s_leds[AW20216S_LED_COUNT] = {
     {0, SW1_CS1, SW1_CS2, SW1_CS3}, {0, SW2_CS1, SW2_CS2, SW2_CS3}, {0, SW3_CS1, SW3_CS2, SW3_CS3}, {0, SW4_CS1, SW4_CS2, SW4_CS3},
     {0, SW5_CS1, SW5_CS2, SW5_CS3}, {0, SW6_CS1, SW6_CS2, SW6_CS3}, {0, SW7_CS1, SW7_CS2, SW7_CS3}, {0, SW8_CS1, SW8_CS2, SW8_CS3},
@@ -671,14 +568,10 @@ const aw20216s_led_t PROGMEM g_aw20216s_leds[AW20216S_LED_COUNT] = {
     {0, SW3_CS16, SW3_CS17, SW3_CS18}, {0, SW7_CS16, SW7_CS17, SW7_CS18}, {0, SW8_CS16, SW8_CS17, SW8_CS18}, {1, SW1_CS16, SW1_CS17, SW1_CS18},
     {1, SW2_CS16, SW2_CS17, SW2_CS18}, {1, SW3_CS16, SW3_CS17, SW3_CS18}, {1, SW4_CS16, SW4_CS17, SW4_CS18}, {1, SW5_CS16, SW5_CS17, SW5_CS18},
     {1, SW6_CS16, SW6_CS17, SW6_CS18}, {1, SW7_CS16, SW7_CS17, SW7_CS18},
-    /* slots 82/83 exist in silicon but are unwired; RGB_MATRIX_LED_COUNT is 82
-       so they are intentionally omitted here. */
+    /* slots 82/83 exist in silicon but are unwired; RGB_MATRIX_LED_COUNT is 82 so they are intentionally */
 };
 
-/* ---- what the display module says back ----
- * The module answers on USART3 RX. Nothing in the keyboard needs those bytes, but they are the
- * only window into its closed firmware, so they are kept in a ring that raw HID 0x53 drains:
- * [0x53] -> [0x53, count, up to 60 bytes..., byte 62 = bytes lost to overflow, byte 63 = bytes still waiting]. */
+/* what the display module says back ---- The module answers on USART3 RX. Nothing in the keyboard */
 #define AL80_LCD_RX_RING 512
 static uint8_t  lcd_rx_ring[AL80_LCD_RX_RING];
 static uint16_t lcd_rx_head = 0, lcd_rx_tail = 0;
@@ -703,18 +596,11 @@ static void al80_lcd_rx_poll(void) {
 static const SerialConfig lcd_serial_config = {AL80_LCD_BAUD, 0, 0, 0};
 
 static void al80_lcd_init(void) {
-    /* AFIO clock: ChibiOS _pal_lld_init already enables AFIOEN, but assert it
-       explicitly so the MAPR writes below can never be silently dropped. */
+    /* AFIO clock */
     RCC->APB2ENR |= RCC_APB2ENR_AFIOEN;
     (void)RCC->APB2ENR;
 
-    /* USART3 partial remap: TX=PC10, RX=PC11.
-       Single write that sets the remap AND (re)asserts the SWJ-disable in one
-       shot. A plain `MAPR |= REMAP` read-modify-write reads the write-only
-       SWJ_CFG field back as 0b000 and would re-enable full JTAG/SWD, reclaiming
-       the matrix pins PA14/PA15/PB3/PB4. Writing the whole field keeps SWJ off
-       while the remap bit sticks. This matches the stock ripple init order
-       (remap set with SWJ disabled). */
+    /* USART3 partial remap */
     AFIO->MAPR = (AFIO->MAPR & ~AFIO_MAPR_SWJ_CFG_Msk)
                | AFIO_MAPR_SWJ_CFG_DISABLE
                | AFIO_MAPR_USART3_REMAP_PARTIALREMAP;
@@ -763,14 +649,7 @@ static bool al80_idle_task(uint8_t *boot_inits) {
     return al80_idle;
 }
 
-/* First byte of the raw-HID report multiplexes: VIA/VialRGB own their own
- * command IDs and never reach here (via.c dispatches those first). Only the
- * three LCD report IDs land in raw_hid_receive_kb. Layout of the report:
- *   [0] cmd (0x40/0x41/0x42)
- *   [3] data_len
- *   [6] ack byte we write back (0x55 ok / 0x0F busy)
- *   [7..] payload forwarded verbatim to the LCD module
- */
+/* First byte of the raw-HID report multiplexes */
 void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
     switch (data[0]) {
         case AP_W_SCREEN_INFO:   // 0x40
@@ -785,11 +664,9 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
                 al80_lcd_page(data[9] == 0x0F);
             }
 #if defined(AL80_LCD_ENABLE)
-            /* No byte-swap: the display module reads RGB565 big-endian, same as al80-studio
-               sends. Confirmed on-device 2026-07-05 (forced 0xE007 -> red; swapped-to-LE -> blue). */
+            /* No byte-swap */
             sdWrite(&SD3, &data[7], data_len);
-            /* Match the stock/b75Pro handler: a short settle after each block so
-               the self-parsing module keeps up with back-to-back writes. */
+            /* Match the stock/b75Pro handler */
             if (data[0] == AP_W_SCREEN_DATA) {
                 wait_us(5);
             }
@@ -803,9 +680,7 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
             data[6] = 0x55;      // release semaphore -> ACK
             break;
 
-        /* ---- user-editable palette protocol ----
-         * The report buffer is echoed back by via.c on return, so responses
-         * are written in place. See config.h for the opcode + ACK layout. */
+        /* user-editable palette protocol ---- The report buffer is echoed back by via.c on return, so */
         case AP_PALETTE_GET: { // 0x43 -> [0x43, count, h0,s0, h1,s1, ...]
             data[1] = AL80_PALETTE_LEN;
             for (uint8_t i = 0; i < AL80_PALETTE_LEN; i++) {
@@ -851,14 +726,10 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
             data[6] = 0x55; // ACK
             break;
 
-        /* ---- per-key live LED stream (host audio-reactive), RAM only ----
-         * [0x49, offset, count, r,g,b x count]. Mirrors the 0x47 side-bar SET: memcpy the chunk
-         * into g_live_rgb, mark the stream active + timestamp it (matrix_scan_kb idles it out when
-         * frames stop). count max = (RAW_EPSIZE-3)/3 = 20; 82 LEDs => 5 reports. No EEPROM. */
+        /* per-key live LED stream (host audio-reactive), RAM only ---- [0x49, offset, count, r,g,b x count] */
         case AP_LIVE_LEDS: { // 0x49
             uint8_t off = data[1], cnt = data[2];
-            /* bound BOTH the destination (off+cnt <= 82) AND the source read from the report:
-             * cnt <= (length-3)/3 == 20, so a malformed cnt can't memcpy past the 64-byte report. */
+            /* bound BOTH the destination (off+cnt <= 82) AND the source read from the report */
             if ((uint16_t)off + cnt <= RGB_MATRIX_LED_COUNT && cnt <= (uint8_t)((length - 3) / 3)) {
                 memcpy(&g_live_rgb[off * 3], &data[3], (uint16_t)cnt * 3);
                 g_live_active = true;
@@ -871,11 +742,7 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
         }
 
 #if defined(AL80_WIRELESS_ENABLE)
-        /* ---- wireless diagnostic ----
-         * [0x4C] -> [0x4C, mode, connected, tx_hi, tx_lo, rx_hi, rx_lo, last4...]
-         * The radio is a black box and this is the first firmware to talk to it,
-         * so the byte counters are the only way to tell "we never transmitted"
-         * apart from "we transmitted and it ignored us". */
+        /* wireless diagnostic ---- [0x4C] -> [0x4C, mode, connected, tx_hi, tx_lo, rx_hi, rx_lo, last4...] */
         case 0x4C:
             al80_wireless_debug(&data[1]);
             data[52] = (uint8_t)(al80_batt.raw >> 8);  data[53] = (uint8_t)al80_batt.raw;
@@ -959,8 +826,7 @@ void matrix_scan_kb(void) {
     matrix_scan_user();
 }
 
-/* Push the battery to the module's homepage gauge every 10s (first push ~2s after boot), but
- * never while an image transfer is in flight (would interleave bytes on USART3). */
+/* Push the battery to the module's homepage gauge every 10s (first push ~2s after boot), but never */
 void housekeeping_task_kb(void) {
     static uint32_t batt_timer = 0;
     static uint32_t init_timer = 0;
@@ -1031,9 +897,7 @@ void housekeeping_task_kb(void) {
         }
     }
 #if defined(AL80_WIRELESS_ENABLE)
-    /* Outside the !g_screen_busy block on purpose: RX polling is non-blocking and
-     * should keep draining even mid-image, while the blocking mode switch inside
-     * al80_wireless_task() gates itself on the flag we pass in. */
+    /* Outside the !g_screen_busy block on purpose */
     al80_wireless_task(g_screen_busy);
 #endif
     housekeeping_task_user();
@@ -1049,39 +913,17 @@ void keyboard_pre_init_kb(void) {
     }
     al80_os_init();
 #if defined(AL80_WIRELESS_ENABLE)
-    /* FIRST, before anything else -- this is what stock does.
-     *
-     * board.h puts PA9 in alternate-function push-pull at halInit, so until
-     * USART1 is actually enabled the pin is driven by a disabled peripheral:
-     * not a guaranteed idle-high UART line. Stock closes that window
-     * immediately (serial_init(460800) is the first call in its board init, at
-     * 0x08009FBE, ahead of the B7 pulse and the LCD). Our old ordering left it
-     * floating through the B7 reset pulse, matrix init, AW20216S init and the
-     * whole LCD bring-up -- hundreds of milliseconds that the module can read
-     * as a sustained break on its RX. */
+    /* FIRST, before anything else -- this is what stock does */
     al80_wireless_init();
 #endif
-    /* Display-module reset pulse. B7 is shared: the aw20216s driver later
-       holds it HIGH to enable the LED matrix (AW20216S_EN_PIN B7, confirmed
-       on-device: B7 low = no keys). But ripple's screen-init first drives B7
-       LOW as a display-module reset/enable (disasm ~0x8009FC2: GPIOB bit7
-       output-PP, then BRR bit7) and our firmware never did, so the module
-       never reset and stayed dark. Pulse it low here, BEFORE aw driver init
-       (which runs during keyboard_init, after this). The aw driver then drives
-       B7 back HIGH -> RGB matrix enabled, module already reset. */
+    /* Display-module reset pulse */
     setPinOutput(B7);
     writePinLow(B7);      // display-module reset pulse (matches ripple screen-init)
     wait_ms(20);
     keyboard_pre_init_user();
 }
 
-/* ---- first boot after flashing over another firmware ----
- * QMK never erases the emulated EEPROM on a flash, so settings written by the firmware that
- * was there before (stock, or an older build with a different layout) are read back as if
- * they were ours: a default layer that does not exist here, a keymap at other offsets.
- * A stamp in byte 0 of the EECONFIG_USER dword marks the store as written by this layout.
- * When it is missing, everything is reset to compiled defaults and the board restarts once.
- * Byte 1 of the same dword is the stored wireless mode (al80_wireless.c). */
+/* first boot after flashing over another firmware ---- QMK never erases the emulated EEPROM on a */
 #define AL80_EEPROM_STAMP 0x5F /* change when the stored layout changes */
 
 static void al80_claim_eeprom(void) {
@@ -1117,14 +959,12 @@ void keyboard_post_init_kb(void) {
     al80_os_apply();
     al80_rotate_load();
 
-    /* Seed the live palette mirror (EEPROM if a valid magic byte is stored,
-       else the compiled default without touching flash). */
+    /* Seed the live palette mirror (EEPROM if a valid magic byte is stored, else the compiled default */
     al80_palette_load();
 
     /* Seed the independent side-bar color from its own EEPROM sub-block. */
     al80_bar_load();
     al80_theme_load();
-
 
     keyboard_post_init_user();
 }

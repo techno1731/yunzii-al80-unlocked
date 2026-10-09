@@ -1,11 +1,7 @@
 /* Copyright 2026 Ennio
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * OS mode: Mac, or Windows/Linux. The mode picks the base layer, the OS icon on the
- * LCD and the USB identity. macOS only honours the Fn/Globe key from a keyboard that
- * identifies as Apple's, while VIA and the vendor tools look for the factory identity,
- * so each mode enumerates as what its host expects. Changing mode therefore restarts
- * the keyboard.
+ * OS mode.
  */
 #include "quantum.h"
 #include "usb_descriptor.h"
@@ -14,8 +10,7 @@
 #define AL80_APPLE_VID 0x05AC
 #define AL80_APPLE_PID 0x029C /* Magic Keyboard */
 
-/* Stored in byte 2 of the EECONFIG_USER dword: high nibble is a tag, low nibble the mode.
- * Byte 0 is the layout stamp (al80.c) and byte 1 the wireless boot mode (al80_wireless.c). */
+/* Stored in byte 2 of the EECONFIG_USER dword */
 #define AL80_OS_SHIFT 16
 #define AL80_OS_MASK 0x00FF0000u
 #define AL80_OS_TAG 0xC0

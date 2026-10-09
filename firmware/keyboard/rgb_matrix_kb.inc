@@ -1,14 +1,7 @@
 /* Copyright 2026 snackdriven
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * AL80 custom RGB matrix effect: PALETTE_CYCLE
- *
- * Proves the "make the rainbow presets just a color or two" idea. Instead of a
- * full 0..255 hue sweep, this reads a small, editable palette array and eases
- * between its entries. The palette now lives in a runtime RAM mirror
- * (al80_palette, defined in al80.c) that can be recoloured live over raw-HID
- * (opcodes 0x43/0x44/0x45) and persisted to EEPROM, so edits take effect
- * without a recompile.
+ * AL80 custom RGB matrix effect.
  */
 
 // clang-format off

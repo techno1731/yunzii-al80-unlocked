@@ -1,9 +1,7 @@
 /* Copyright 2026 snackdriven
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * YUNZII AL80 (STM32F103xB, stm32duino bootloader)
- * Hardware params recovered by RIPPLE.bin disassembly, reconciled with the
- * MK856 cert source. See research/al80-qmk-hardware-params.md.
+ * YUNZII AL80 (STM32F103xB, stm32duino bootloader) Hardware params recovered by RIPPLE.bin.
  */
 #pragma once
 
@@ -17,8 +15,7 @@
 /* aw20216s chip-selects */
 #define AW20216S_CS_PIN_1 B6   /* driver 0 */
 #define AW20216S_CS_PIN_2 C8   /* driver 1 */
-/* aw20216s hardware enable: the driver drives B7 HIGH to enable the LED matrix.
- * On-device the keys go dark when B7 is low, confirming B7 is the aw enable. */
+/* aw20216s hardware enable */
 #define AW20216S_EN_PIN B7
 
 /* SPI mode 0, /4 divisor are the driver defaults; keep explicit for clarity */
@@ -53,8 +50,7 @@
 /* Baud 460800, 8N1, interrupt-driven (no DMA). SD3 started in post_init. */
 #define AL80_LCD_BAUD 921600
 
-/* raw-HID endpoint/report size: vendor firmware uses 64-byte raw-HID for both
- * VIA/lighting commands and the LCD stream; usevia + our tooling assume 64. */
+/* raw-HID endpoint/report size */
 #define RAW_EPSIZE 64
 
 /* raw-HID report ids used by the LCD pass-through protocol */
@@ -62,20 +58,10 @@
 #define AP_W_SCREEN_DATA 0x41
 #define AP_GIVE_SCREEN_SEM 0x42
 
-/* ---- user-editable RGB palette (PALETTE_CYCLE effect) ----
- * A RAM mirror of PALETTE_LEN {hue,sat} pairs feeds the PALETTE_CYCLE effect.
- * It is loaded at post_init from a dedicated, collision-safe KB EEPROM
- * datablock (STM32F1 wear-leveling flash) and edited live over raw-HID.
- * Grow the palette by bumping AL80_PALETTE_LEN (and AL80_PALETTE_DEFAULT
- * in al80.c); the datablock size tracks it automatically. */
+/* user-editable RGB palette (PALETTE_CYCLE effect) ---- A RAM mirror of PALETTE_LEN {hue,sat} pairs */
 #define AL80_PALETTE_LEN 3
 
-/* Dedicated KB datablock. Two sub-blocks packed at fixed offsets so growing one
- * never disturbs the other (each has its own validity magic):
- *   [0 .. AL80_PALETTE_STORE_SIZE)  palette : 1 magic byte + PALETTE_LEN {h,s} pairs
- *   [AL80_PALETTE_STORE_SIZE ..  )  side bar: 1 magic + h + s + v + independent (5 bytes)
- * QMK reserves EECONFIG_KB_DATABLOCK for us, so this never collides with
- * VIA/Vial dynamic-keymap or rgb_matrix eeconfig storage. */
+/* Dedicated KB datablock */
 #define AL80_PALETTE_STORE_SIZE (1 + AL80_PALETTE_LEN * 2)
 #define AL80_BAR_STORE_SIZE     5   /* magic + h + s + v + independent */
 /* Backlight theme for the GIF page: magic + scene count + AL80_THEME_MAX x {tenths of a second, hue, sat}. */
@@ -83,37 +69,27 @@
 #define AL80_THEME_STORE_SIZE   (2 + AL80_THEME_MAX * 3)
 #define EECONFIG_KB_DATA_SIZE   (AL80_PALETTE_STORE_SIZE + AL80_BAR_STORE_SIZE + AL80_THEME_STORE_SIZE)
 
-/* raw-HID palette protocol opcodes (top-level, alongside LCD 0x40..0x42).
- * VIA command IDs top out at 0x13 (+0xFE/0xFF), so these reach the default
- * case in via.c's raw_hid_receive() -> raw_hid_receive_kb(). */
+/* raw-HID palette protocol opcodes (top-level, alongside LCD 0x40..0x42) */
 #define AP_PALETTE_GET  0x43
 #define AP_PALETTE_SET  0x44
 #define AP_PALETTE_SAVE 0x45
 
-/* raw-HID side-LED-bar protocol opcodes (mirror the palette ones). The bar is
- * RGB-matrix indices 76..78; when independent it renders bar_hsv instead of
- * following the keys. GET echoes state; SET writes RAM + ACK 0x55; SAVE flushes. */
+/* raw-HID side-LED-bar protocol opcodes (mirror the palette ones) */
 #define AP_BAR_GET  0x46
 #define AP_BAR_SET  0x47
 #define AP_BAR_SAVE 0x48
 
-/* raw-HID per-key live LED stream (host -> keyboard). Next free opcode after the bar range.
- * Report: [0x49, offset, count, R,G,B x count(<=20), spare]. RAM-only, no EEPROM. The handler
- * memcpys each chunk into g_live_rgb and the indicators hook repaints it every render. */
+/* raw-HID per-key live LED stream (host -> keyboard) */
 #define AP_LIVE_LEDS 0x49
 
-/* raw-HID backlight theme for the GIF page. SET: [0x50, count, {tenths, hue, sat} x count] stores it;
- * GET: [0x51] -> [0x51, count, {tenths, hue, sat} x count]. A count of 0 switches the theme off. */
+/* raw-HID backlight theme for the GIF page */
 #define AP_THEME_SET 0x50
 #define AP_THEME_GET 0x51
 
-/* keyboard -> host panel-request signal (UNSOLICITED raw_hid_send, not a reply). Report:
- * [0x4B, panelId, 0...]. 0x49/0x4A/0x4B were the free opcodes above the host->kb customs
- * (0x40-0x48); 0x4B can never false-resolve an in-flight image ACK (matcher keys on byte0=0x41). */
+/* keyboard -> host panel-request signal (UNSOLICITED raw_hid_send, not a reply) */
 #define AP_PANEL_REQ 0x4B
 
-/* Live-LED stream idle fallback + brightness cap (defense in depth; the host also caps). When
- * frames stop for AL80_LIVE_IDLE_MS the prior RGB effect resumes (no re-selection, no EEPROM). */
+/* Live-LED stream idle fallback + brightness cap (defense in depth; the host also caps) */
 #ifndef AL80_LIVE_IDLE_MS
 #    define AL80_LIVE_IDLE_MS 500
 #endif
@@ -121,12 +97,10 @@
 #    define AL80_LIVE_MAX_VAL 160   /* ~63% cap (NFR1). Set 255 to disable the firmware cap. */
 #endif
 
-/* VialRGB effect id for the custom PALETTE_CYCLE effect. High range so it
- * cannot collide with the stock VIALRGB_EFFECT_* ids (which end < 0x40). */
+/* VialRGB effect id for the custom PALETTE_CYCLE effect */
 #define AL80_VIALRGB_PALETTE_CYCLE_ID 0x0100
 
-/* ---- built-in RGB matrix effects (v18: were all off -> only SOLID_COLOR + custom PALETTE_CYCLE
- * existed, so al80-studio effects no-op'd). Enable the popular non-framebuffer ones. ---- */
+/* built-in RGB matrix effects (v18 */
 #define ENABLE_RGB_MATRIX_BREATHING
 #define ENABLE_RGB_MATRIX_BAND_VAL
 #define ENABLE_RGB_MATRIX_CYCLE_ALL
@@ -146,10 +120,7 @@
 #define ENABLE_RGB_MATRIX_DIGITAL_RAIN
 #define ENABLE_RGB_MATRIX_PIXEL_RAIN
 
-/* ---- v20: react-to-keypress effects (the whole point). Flash reclaimed by
- * disabling TAP_DANCE/COMBO/KEY_OVERRIDE in keymaps/vial/rules.mk. All the
- * reactive/splash effects below are gated behind RGB_MATRIX_KEYREACTIVE_ENABLED
- * which also pulls in g_last_hit_tracker. ---- */
+/* v20 */
 #define RGB_MATRIX_KEYREACTIVE_ENABLED
 #define ENABLE_RGB_MATRIX_SOLID_REACTIVE_SIMPLE
 #define ENABLE_RGB_MATRIX_SOLID_REACTIVE

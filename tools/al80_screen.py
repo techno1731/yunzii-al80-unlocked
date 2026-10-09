@@ -101,10 +101,7 @@ def fill_scene(frames, count):
 
 
 def dominant_hue_sat(rgb_frames):
-    """Dominant vivid colour of a scene as QMK hue and saturation (0-255 each).
-
-    Pixels vote with their saturation times brightness, so a dark or grey background does not
-    wash out the answer. Hue is averaged on the colour wheel."""
+    """Dominant vivid colour of a scene as QMK hue and saturation (0-255 each)."""
     import math
     x = y = weight = sat_sum = 0.0
     for raw in rgb_frames:

@@ -1,6 +1,4 @@
-/* Device-free tests for al80_logic.h.
- *   run:  firmware/test/run.sh
- */
+/* Device-free tests for al80_logic.h */
 #include <stdio.h>
 #include <string.h>
 

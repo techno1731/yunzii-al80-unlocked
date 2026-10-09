@@ -3,12 +3,7 @@
  */
 #include QMK_KEYBOARD_H
 
-/* Hardcoded per-layer encoder (knob). Runs the instant the firmware is flashed:
- * no Vial layout entry, no ENCODER_MAP, no dynamic-keymap EEPROM seed, so it
- * can never fall back to KC_NO. Knob-right = clockwise.
- *   L0 volume, L1 RGB brightness, L2 RGB hue, L3 media prev/next.
- * RGB layers call the rgb_matrix API directly (RGB_* keycodes do NOT work via
- * tap_code16 -- they need process_record, not the HID report). */
+/* Hardcoded per-layer encoder (knob) */
 bool encoder_update_user(uint8_t index, bool clockwise) {
     if (index != 0) {
         return false;
@@ -50,8 +45,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     ),
     [1] = LAYOUT(
         _______, KC_BRID, KC_BRIU, LGUI(KC_TAB), KC_MYCM, KC_MAIL, KC_WHOM, KC_MPRV, KC_MPLY, KC_MNXT, KC_MUTE, KC_VOLD, KC_VOLU, _______, KC_MUTE,
-        /* host-free LCD view keys (fresh-board defaults; existing users bind via Studio/Vial):
-           Fn+8 = picture, Fn+9 = home/clock, Fn+0 = gif */
+        /* host-free LCD view keys (fresh-board defaults; existing users bind via Studio/Vial) */
         _______, _______, _______, _______, _______, _______, _______, _______, AL80_KC_VIEW_PICTURE, AL80_KC_VIEW_HOME, AL80_KC_VIEW_GIF, _______, _______, _______, _______,
         _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, RGB_MOD, _______,
         _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______,          RGB_HUI,
