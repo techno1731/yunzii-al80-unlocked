@@ -1,4 +1,4 @@
-# al80-open
+# yunzii-al80-unlocked
 
 Open firmware and tools for the YUNZII AL80 keyboard and its screen.
 
