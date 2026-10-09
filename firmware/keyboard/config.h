@@ -28,7 +28,7 @@
 
 /* ---- firmware identity and behaviour ---- */
 /* Build counter reported by the 0x4C diagnostic, bumped on every flashed build. */
-#define AL80_FW_BUILD 8
+#define AL80_FW_BUILD 9
 /* On battery, lights and LCD go dark after this long without a key or knob event. */
 #ifndef AL80_IDLE_MS
 #    define AL80_IDLE_MS 300000

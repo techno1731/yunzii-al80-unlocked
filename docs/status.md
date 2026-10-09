@@ -34,7 +34,7 @@ its hardware-free tests pass. Nothing below is verified on a keyboard until the 
 
 - 2.4G with the cable out was dead on upstream. The switch read above is the first fix to try; the
   cause is not yet confirmed.
-- The battery reading jumps between charging and discharging (97% on USB, 23% on battery a minute later). Build 3 rate-limits the shown level and logs raw samples (0x4F) so the curve can be checked against real use.
+- The battery gauge fell to 14% in an hour on 2.4G while the cell was near 3.95 V (about 80%). About one reading in seven was a glitch (reference misread, or a brief dip) and the shown level could only step down. Build 9 takes the median of three readings and of the last five samples, and lets the level climb back on battery. Not yet confirmed over a long wireless session.
 - The MCU does not enter stop mode, so battery life will still trail the stock firmware.
 - Reports are sent whether or not the module says the link is up (`AL80_WL_OPTIMISTIC`), until the
   corrected link status is confirmed on hardware.

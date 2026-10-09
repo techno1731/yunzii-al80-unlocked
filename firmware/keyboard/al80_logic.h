@@ -24,6 +24,7 @@
 #define AL80_BATT_MV_80 3930
 #define AL80_BATT_MV_85 3980
 #define AL80_BATT_MV_100 4150
+#define AL80_BATT_RECOVER 5 /* points the cell must read above the shown level before it rises on battery */
 
 typedef struct {
     uint16_t raw;    /* ADC count on the cell divider */
@@ -64,7 +65,35 @@ static inline al80_batt_t al80_batt_eval(uint16_t raw, uint16_t vref, bool plugg
 static inline uint8_t al80_batt_follow(uint8_t shown, uint8_t measured, uint8_t status) {
     if (status == AL80_BATT_FULL) return 100;
     if (status == AL80_BATT_CHARGING) return (measured > shown && shown < 100) ? (uint8_t)(shown + 1) : shown;
-    return (measured < shown && shown > 0) ? (uint8_t)(shown - 1) : shown;
+    if (measured < shown && shown > 0) return (uint8_t)(shown - 1);
+    return (measured >= shown + AL80_BATT_RECOVER) ? (uint8_t)(shown + 1) : shown; /* undo a wrong low reading */
+}
+
+/* Median of three readings, so one glitched conversion cannot win */
+static inline uint16_t al80_median3(uint16_t a, uint16_t b, uint16_t c) {
+    if (a > b) { uint16_t t = a; a = b; b = t; }
+    if (b > c) b = c;
+    return a > b ? a : b;
+}
+
+/* Last few cell voltages; the level is taken from their median */
+#define AL80_BATT_WIN 5
+typedef struct {
+    uint16_t mv[AL80_BATT_WIN];
+    uint8_t  n, head;
+} al80_batt_win_t;
+
+static inline uint16_t al80_batt_win_push(al80_batt_win_t *w, uint16_t mv) {
+    w->mv[w->head] = mv;
+    w->head        = (uint8_t)((w->head + 1) % AL80_BATT_WIN);
+    if (w->n < AL80_BATT_WIN) w->n++;
+    uint16_t s[AL80_BATT_WIN];
+    for (uint8_t i = 0; i < w->n; i++) {
+        uint8_t j = i;
+        for (; j > 0 && s[j - 1] > w->mv[i]; j--) s[j] = s[j - 1];
+        s[j] = w->mv[i];
+    }
+    return s[w->n / 2];
 }
 
 /* ---- radio module status frames: 55 03 <cmd 0..2> <mode 0..4> <data> ---- */

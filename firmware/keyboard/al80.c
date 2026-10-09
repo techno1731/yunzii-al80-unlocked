@@ -48,12 +48,13 @@ static void al80_adc_init(void) {
 static uint16_t al80_adc_read(uint8_t channel) {
     uint32_t sum = 0;
     ADC1->SQR3 = channel;
-    for (uint8_t i = 0; i < 8; i++) {
+    for (uint8_t i = 0; i < 9; i++) {
         uint16_t t = 20000;
         ADC1->CR2 |= ADC_CR2_SWSTART;
         while (!(ADC1->SR & ADC_SR_EOC) && --t) {}
         if (!t) return 0;
-        sum += ADC1->DR & 0x0FFF;
+        const uint16_t v = ADC1->DR & 0x0FFF;
+        if (i) sum += v; /* the first conversion after a channel change still carries the last channel */
     }
     return (uint16_t)(sum / 8);
 }
@@ -75,9 +76,16 @@ static uint8_t         al80_batt_log_tick = AL80_BATT_LOG_EVERY - 1;
 
 static void al80_batt_sample(void) {
     static bool    first = true;
-    const uint16_t raw   = al80_adc_read(9);
+    static al80_batt_win_t win;
     const bool     plug  = readPin(AL80_PLUG_PIN);
-    al80_batt            = al80_batt_eval(raw, al80_adc_read(17), plug);
+    al80_batt_t    s[3];
+    for (uint8_t i = 0; i < 3; i++) {
+        const uint16_t raw = al80_adc_read(9);
+        s[i]               = al80_batt_eval(raw, al80_adc_read(17), plug);
+    }
+    const uint16_t mid = al80_median3(s[0].mv, s[1].mv, s[2].mv);
+    al80_batt          = s[0].mv == mid ? s[0] : s[1].mv == mid ? s[1] : s[2];
+    if (al80_batt.valid && al80_batt.status != AL80_BATT_FULL) al80_batt.pct = al80_batt_pct(al80_batt_win_push(&win, al80_batt.mv));
     al80_batt_shown      = first ? al80_batt.pct : al80_batt_follow(al80_batt_shown, al80_batt.pct, al80_batt.status);
     first                = false;
     if (++al80_batt_log_tick >= AL80_BATT_LOG_EVERY) {

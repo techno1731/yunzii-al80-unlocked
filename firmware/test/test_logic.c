@@ -69,9 +69,18 @@ static void test_battery_follow(void) {
     CHECK(shown == 24);
     /* A charging cell never appears to lose charge. */
     CHECK(al80_batt_follow(60, 40, AL80_BATT_CHARGING) == 60);
-    /* Unplugging drops the reading: the shown level walks down, never up. */
+    /* Unplugging drops the reading: the shown level walks down a point per sample. */
     CHECK(al80_batt_follow(98, 23, AL80_BATT_DISCHARGING) == 97);
-    CHECK(al80_batt_follow(40, 55, AL80_BATT_DISCHARGING) == 40);
+    CHECK(al80_batt_follow(40, 44, AL80_BATT_DISCHARGING) == 40); /* small recovery is ignored */
+    CHECK(al80_batt_follow(14, 85, AL80_BATT_DISCHARGING) == 15); /* a wrong low level climbs back */
+    CHECK(al80_median3(3961, 3405, 3928) == 3928);
+    CHECK(al80_median3(5, 5, 9) == 5);
+    al80_batt_win_t w = {0};
+    CHECK(al80_batt_win_push(&w, 3990) == 3990);
+    al80_batt_win_push(&w, 3405); /* glitch */
+    al80_batt_win_push(&w, 3988);
+    al80_batt_win_push(&w, 3405); /* glitch */
+    CHECK(al80_batt_win_push(&w, 3961) == 3961);
     /* Limits hold, and a full cell is full. */
     CHECK(al80_batt_follow(100, 100, AL80_BATT_CHARGING) == 100);
     CHECK(al80_batt_follow(0, 0, AL80_BATT_DISCHARGING) == 0);
